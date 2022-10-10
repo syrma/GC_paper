@@ -7,7 +7,7 @@
 
 ```bash
 #script mode (includes experiment tracking with wandb) 
-python vppo_gae_ensemble_buf.py \
+python GC_PPO.py \
 --num_critics 1 --env_name HopperBulletEnv-v0 \ 
 --kl_rollback --norm_rew --bootstrap --seed 1
 ```

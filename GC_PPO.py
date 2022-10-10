@@ -1,18 +1,17 @@
 import os
-
-import tensorflow as tf
-import gym
-import pybullet_envs
 import time
-import math
 import argparse
 import wandb
 import sys
 import tempfile
+
+import numpy as np
+import tensorflow as tf
+import gym
+import pybullet_envs
 import tensorflow_probability as tfp
 tfd = tfp.distributions
 
-import numpy as np
 
 # taken from https://github.com/openai/baselines/blob/master/baselines/common/vec_env/vec_normalize.py
 class RunningMeanStd:
@@ -108,8 +107,9 @@ class Buffer(object):
         self.rets.append(ret)
 
         #(attempt at) scaling the rewards
-        self.ret_rms.update(np.array(self.rets))
-        ep_rew = ep_rew / tf.sqrt(tf.cast(self.ret_rms.var, tf.float32) + 1e-8)
+        if wandb.config.norm_rew:
+            self.ret_rms.update(np.array(self.rets))
+            ep_rew = ep_rew / tf.sqrt(tf.cast(self.ret_rms.var, tf.float32) + 1e-8)
 
         # v_hats = discounted cumulative sum
         discounts = tf.math.cumprod(tf.fill(ep_rew.shape, self.gam), exclusive=True)
@@ -323,6 +323,7 @@ if __name__ == '__main__':
     parser.add_argument('--kl_rollback', action='store_true', help= 'Include early stopping with rollback in the training')
     parser.add_argument('--bootstrap', action='store_true', help='Include bootstrapping when fitting the critic networks')
     parser.add_argument('--norm_rew', action='store_true', help= 'Include Reward Scaling optimization')
+    parser.add_argument('--norm_obs', action='store_true', help='Include Observation Normalization optimization')
     parser.add_argument('--load_dir', help='Optional: directory of saved model to test or resume training')
     parser.add_argument('--env_name', help='Environment name to use with OpenAI Gym')
     parser.add_argument('--save_dir', help='Optional: directory where the model should be saved')
@@ -364,17 +365,8 @@ if __name__ == '__main__':
         wandb.config.seed = seed
         wandb.config.n_critics = n_critics
         wandb.config.norm_adv = True
-        wandb.config.norm_obs = False
-
-        if args.norm_rew:
-            wandb.config.norm_rew = True
-        else:
-            wandb.config.norm_rew = False
-
-        if args.bootstrap:
-            wandb.config.bootstrap = True
-        else:
-            wandb.config.bootstrap = False
+        wandb.config.norm_rew = True if args.norm_rew else False
+        wandb.config.bootstrap = True if args.bootstrap else False
 
         if args.kl_stop or args.kl_rollback:
             wandb.config.kl_target = kl_target
@@ -400,10 +392,15 @@ if __name__ == '__main__':
         act_spc = env.action_space
         if act_spc.shape:
             env = gym.wrappers.ClipAction(env)
-        #env = gym.wrappers.NormalizeObservation(env)
-        #env = gym.wrappers.TransformObservation(env, lambda obs: tf.clip_by_value(obs, -10, 10))
-        #env = gym.wrappers.NormalizeReward(env)
-        #env = gym.wrappers.TransformReward(env, lambda reward: tf.clip_by_value(reward, -10, 10))
+
+        if args.norm_obs:
+            wandb.config.norm_obs = True
+            env = gym.wrappers.NormalizeObservation(env)
+            env = gym.wrappers.TransformObservation(env, lambda obs: tf.clip_by_value(obs, -10, 10))
+            #env = gym.wrappers.NormalizeReward(env)
+            #env = gym.wrappers.TransformReward(env, lambda reward: tf.clip_by_value(reward, -10, 10))
+        else:
+            wandb.config.norm_obs = False
 
         #seeding
         tf.random.set_seed(seed)
