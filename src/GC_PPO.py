@@ -7,6 +7,7 @@ import tempfile
 
 import numpy as np
 import tensorflow as tf
+import tf_keras as keras
 import gym
 import pybullet_envs
 import tensorflow_probability as tfp
@@ -301,7 +302,7 @@ def test(epochs, env, model):
         obs, done = env.reset(), False
         episode_rew = 0
         while not done:
-            env.render()
+            #env.render()
             act, _ = action(model, obs, env)
             obs, rew, done, _ = env.step(act.numpy())
             episode_rew += rew
@@ -336,7 +337,7 @@ if __name__ == '__main__':
     env_name = args.env_name
     if(not env_name):
         #parser.error("No env_name provided.")
-        env_name="CartPole-v0"
+        env_name="CartPole-v1"
 
     seeds = args.seed
     n_critics = args.num_critics
@@ -347,7 +348,7 @@ if __name__ == '__main__':
     batch_size = 10000
     epochs = 200
     learning_rate = 3e-4
-    opt = tf.optimizers.Adam(learning_rate)
+    opt = keras.optimizers.Adam(learning_rate)
     γ = .99
     λ = 0.97
 
@@ -387,7 +388,12 @@ if __name__ == '__main__':
 
 
         #environment creation
-        env = gym.make(env_name)
+        if args.test != None:
+            env = gym.make(env_name, render_mode="human")
+        else:
+            env = gym.make(env_name)
+            #env = gym.wrappers.RecordVideo(env, save_dir)
+
         obs_spc = env.observation_space
         act_spc = env.action_space
         if act_spc.shape:
@@ -409,22 +415,22 @@ if __name__ == '__main__':
         obs_spc.seed(seed)
 
         # policy/actor model
-        model = tf.keras.models.Sequential([
-            tf.keras.layers.Dense(120, activation='relu', input_shape=obs_spc.shape),
-            tf.keras.layers.Dense(84, activation='relu'),
-            tf.keras.layers.Dense(act_spc.shape[0] if act_spc.shape else act_spc.n)
+        model = keras.models.Sequential([
+            keras.layers.Dense(120, activation='relu', input_shape=obs_spc.shape),
+            keras.layers.Dense(84, activation='relu'),
+            keras.layers.Dense(act_spc.shape[0] if act_spc.shape else act_spc.n)
         ])
         if act_spc.shape:
             model.log_std = tf.Variable(tf.fill(env.action_space.shape, -0.5))
         model.summary()
 
-        # value/critic model
+      # value/critic model
         critics = list()
 
         for _ in range(n_critics):
-            value_model = tf.keras.models.Sequential([
-                tf.keras.layers.Dense(64, activation='relu', input_shape=obs_spc.shape),
-                tf.keras.layers.Dense(1)
+            value_model = keras.models.Sequential([
+                keras.layers.Dense(64, activation='relu', input_shape=obs_spc.shape),
+                keras.layers.Dense(1)
             ])
             value_model.compile('adam', loss='MSE')
             critics.append(value_model)
@@ -433,7 +439,7 @@ if __name__ == '__main__':
             load_model(model, load_dir +'/'+ env_name)
 
         if args.test != None:
-            env.render()
+            #env.render()
             test(epochs, env, model)
         else:
             #env = gym.wrappers.RecordVideo(env, save_dir)
