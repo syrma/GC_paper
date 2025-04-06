@@ -64,3 +64,7 @@ $ uv run GC_PPO.py \
 --num_critics 1 --env_name HopperBulletEnv-v0 \ 
 --kl_rollback --norm_rew --bootstrap --seed 1
 ```
+
+### Notebook
+
+A notebook version (.ipynb) can be used to test the algorithm in a simpler, more interactive environment, without the need to track the experiment on wandb. It can also be viewed fully online on [Collab](https://colab.research.google.com/drive/17n107Iv5EmYnvcmACqZBA_8U_G5zkQ1e?usp=sharing).
