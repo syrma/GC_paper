@@ -152,7 +152,7 @@ class Buffer(object):
         if self.continuous:
             dist = tfd.MultivariateNormalDiag(model(obs), tf.exp(self.model.log_std))
         else:
-            dist = tfd.Categorical(logits=model(obs))
+            dist = tfd.Categorical(logits=self.model(obs))
 
         new_logprob = dist.log_prob(act)
 
@@ -166,7 +166,7 @@ class Buffer(object):
         if self.continuous:
             dist = tfd.MultivariateNormalDiag(model(obs), tf.exp(self.model.log_std))
         else:
-            dist = tfd.Categorical(logits=model(obs))
+            dist = tfd.Categorical(logits=self.model(obs))
 
         new_logprob = dist.log_prob(act)
 
@@ -183,7 +183,7 @@ def action(model, obs, env):
     if env.action_space.shape:
         dist = tfd.MultivariateNormalDiag(est, tf.exp(model.log_std))
     else:
-        dist = tfd.Categorical(logits=est, dtype=env.action_space.dtype)
+        dist = tfd.Categorical(logits=est)
 
     action = dist.sample()
     logprob = tf.reduce_sum(dist.log_prob(action))
@@ -193,6 +193,7 @@ def action(model, obs, env):
 
 def run_one_episode(env, buf):
     obs_dtype = env.observation_space.dtype
+    act_dtype = env.action_space.dtype
 
     obs = env.reset()
     obs = tf.cast(obs, obs_dtype)
@@ -200,6 +201,7 @@ def run_one_episode(env, buf):
 
     for i in range(buf.ptr, buf.size):
         act, prob = action(buf.model, obs, env)
+        act = tf.cast(act, act_dtype)
         new_obs, rew, done, _ = env.step(act.numpy())
         
         rew = tf.cast(rew, 'float32')
@@ -219,7 +221,7 @@ def run_one_episode(env, buf):
     return time.time() - critic_start
 
 
-def train_one_epoch(env, batch_size, model, critics, γ, λ, save_dir):
+def train_one_epoch(env, batch_size, model, critics, opt, γ, λ, save_dir):
     obs_spc = env.observation_space
     act_spc = env.action_space
 
@@ -284,11 +286,12 @@ def load_model(model, load_path):
     ckpt.restore(manager.latest_checkpoint)
     print("Restoring from {}".format(manager.latest_checkpoint))
 
-def train(epochs, env, batch_size, model, critics, γ, λ, save_dir):
+def train(epochs, env, batch_size, model, critics, learning_rate, γ, λ, save_dir):
+    opt = keras.optimizers.Adam(learning_rate)
     for i in range(1, epochs + 1):
         start_time = time.time()
         print('Epoch: ', i)
-        batch_loss = train_one_epoch(env, batch_size, model, critics, γ, λ, save_dir)
+        batch_loss = train_one_epoch(env, batch_size, model, critics, opt, γ, λ, save_dir)
         now = time.time()
 
         wandb.log({'Epoch': i,
@@ -317,7 +320,7 @@ class Parser(argparse.ArgumentParser):
 first_start_time = time.time()
 # training loop
 
-if __name__ == '__main__':
+def main():
     parser = Parser(description='Train or test PPO')
     parser.add_argument('test', nargs='?', help = 'Test a saved or a random model')
     parser.add_argument('--kl_stop', action='store_true', help= 'Early stopping')
@@ -443,5 +446,8 @@ if __name__ == '__main__':
             test(epochs, env, model)
         else:
             #env = gym.wrappers.RecordVideo(env, save_dir)
-            train(epochs, env, batch_size, model, critics, γ, λ, save_dir)
+            train(epochs, env, batch_size, model, critics, learning_rate, γ, λ, save_dir)
         wandb.finish()
+
+if __name__ == '__main__':
+   main()
