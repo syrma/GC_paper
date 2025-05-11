@@ -7,7 +7,7 @@ import tempfile
 
 import numpy as np
 import tensorflow as tf
-import tf_keras as keras
+import keras
 import gym
 import pybullet_envs
 import tensorflow_probability as tfp
@@ -146,50 +146,6 @@ class Buffer(object):
             self.V_hats = self.V_hats.stack()
             self.gae = self.gae.stack()
 
-    def approx_kl(self):
-        obs, act, logprob = self.obs_buf, self.act_buf, self.prob_buf
-
-        if self.continuous:
-            dist = tfd.MultivariateNormalDiag(model(obs), tf.exp(self.model.log_std))
-        else:
-            dist = tfd.Categorical(logits=self.model(obs))
-
-        new_logprob = dist.log_prob(act)
-
-        return tf.reduce_mean(logprob - new_logprob)
-
-    # @tf.function
-    def loss(self):
-        eps = 0.1
-        obs, act, adv, logprob = self.obs_buf, self.act_buf, self.gae, self.prob_buf
-
-        if self.continuous:
-            dist = tfd.MultivariateNormalDiag(model(obs), tf.exp(self.model.log_std))
-        else:
-            dist = tfd.Categorical(logits=self.model(obs))
-
-        new_logprob = dist.log_prob(act)
-
-        mask = tf.cast(adv >= 0, tf.float32)
-        epsilon_clip = mask * (1 + eps) + (1 - mask) * (1 - eps)
-        ratio = tf.exp(new_logprob - logprob)
-
-        return -tf.reduce_mean(tf.minimum(ratio * adv, epsilon_clip * adv))
-
-
-@tf.function
-def action(model, obs, env):
-    est = tf.squeeze(model(tf.expand_dims(obs, 0)), axis=0)
-    if env.action_space.shape:
-        dist = tfd.MultivariateNormalDiag(est, tf.exp(model.log_std))
-    else:
-        dist = tfd.Categorical(logits=est)
-
-    action = dist.sample()
-    logprob = tf.reduce_sum(dist.log_prob(action))
-
-    return action, logprob
-
 
 def run_one_episode(env, buf):
     obs_dtype = env.observation_space.dtype
@@ -200,7 +156,7 @@ def run_one_episode(env, buf):
     done = False
 
     for i in range(buf.ptr, buf.size):
-        act, prob = action(buf.model, obs, env)
+        act, prob = buf.model.action(obs)
         act = tf.cast(act, act_dtype)
         new_obs, rew, done, _ = env.step(act.numpy())
         
@@ -234,24 +190,21 @@ def train_one_epoch(env, batch_size, model, critics, opt, γ, λ, save_dir):
 
     train_start_time = time.time()
 
-    var_list = list(model.trainable_weights)
-    if act_spc.shape:
-        var_list.append(model.log_std)
+    model.fit([batch.obs_buf, batch.act_buf, batch.gae, batch.prob_buf], epochs=80, steps_per_epoch=1, verbose=1)
 
-    for i in range(80):
-        save_model(model, save_dir)
-        opt.minimize(batch.loss, var_list=var_list)
+#todo: figure out how to do early stopping with model.fit
+
 
         # do we want early stopping?
-        if not wandb.config.kl_stop:
-            continue
+        #if not wandb.config.kl_stop:
+        #    continue
 
-        if batch.approx_kl() > 1.5 * kl_target:
-            print(f"Early stopping at step {i}")
+        #if batch.approx_kl() > 1.5 * kl_target:
+        #    print(f"Early stopping at step {i}")
             # rollback if asked to
-            if wandb.config.kl_rollback:
-                load_model(model, save_dir)
-            break
+        #    if wandb.config.kl_rollback:
+        #        load_model(model, save_dir)
+        #    break
 
     train_time = time.time() - train_start_time
     run_time = train_start_time - start_time
@@ -264,7 +217,7 @@ def train_one_epoch(env, batch_size, model, critics, opt, γ, λ, save_dir):
         mask = tf.random.uniform([batch.size]) < bootstrap_value
         masked_obs = tf.boolean_mask(batch.obs_buf, mask)
         masked_vhats = tf.boolean_mask(batch.V_hats, mask)
-        hist = critics[i].fit(batch.obs_buf.numpy(), batch.V_hats.numpy(), epochs=80, steps_per_epoch=1, verbose=0)
+        hist = critics[i].fit(batch.obs_buf.numpy(), batch.V_hats.numpy(), epochs=80, steps_per_epoch=1, verbose=1)
         wandb.log({f'LossV{i}': tf.reduce_mean(hist.history['loss']).numpy()}, commit=False)
 
     wandb.log({'EpRet': wandb.Histogram(batch.rets),
@@ -306,7 +259,7 @@ def test(epochs, env, model):
         episode_rew = 0
         while not done:
             #env.render()
-            act, _ = action(model, obs, env)
+            act, _ = model.action(obs)
             obs, rew, done, _ = env.step(act.numpy())
             episode_rew += rew
         print("Episode reward", episode_rew)
@@ -317,8 +270,84 @@ class Parser(argparse.ArgumentParser):
         self.print_help()
         sys.exit(2)
 
-first_start_time = time.time()
-# training loop
+class PolicyGradientTrainer(keras.Model):
+    def __init__(self, model, act_spc):
+        super().__init__()
+        self.continuous = bool(act_spc.shape)
+        self.model = model
+
+        if self.continuous:
+            self.log_std = self.add_weight(shape=act_spc.shape, initializer=-0.5)
+
+    @tf.function
+    def call(self, inputs):
+        x = self.model(inputs)
+
+        if self.continuous:
+            # x is mean vector
+            return x, self.std_dev
+        else:
+            # x is logits
+            return x
+
+    @tf.function
+    def policy(self, obs):
+        if self.continuous:
+            return tfd.MultivariateNormalDiag(self(obs), tf.exp(self.log_std))
+        else:
+            return tfd.Categorical(logits=self(obs))
+
+    @tf.function
+    def train_step(self, data):
+        (obs, act, adv, logprob), = data
+
+        var_list = list(self.trainable_weights)
+
+        with tf.GradientTape() as tape:
+            loss, new_logprob = self.compute_loss(obs, act, adv, logprob)
+
+        grads = tape.gradient(loss, var_list)
+        self.optimizer.apply(grads, trainable_variables=var_list)
+
+        for metric in self.metrics:
+            if metric.name == "loss":
+                metric.update_state(loss)
+            else:
+                metric.update_state(logprob, new_logprob)
+
+        return {m.name: m.result() for m in self.metrics}
+
+    @tf.function
+    def action(self, obs):
+        dist = self.policy(tf.expand_dims(obs, 0))
+
+        act = tf.squeeze(dist.sample(), axis=0)
+        logprob = tf.reduce_sum(dist.log_prob(act))
+
+        return act, logprob
+
+    @tf.function
+    def compute_loss(self, obs, act, adv, logprob):
+        eps = 0.1
+
+        dist = self.policy(obs)
+
+        new_logprob = dist.log_prob(act)
+
+        mask = tf.cast(adv >= 0, tf.float32)
+        epsilon_clip = mask * (1 + eps) + (1 - mask) * (1 - eps)
+        ratio = tf.exp(new_logprob - logprob)
+
+        return -tf.reduce_mean(tf.minimum(ratio * adv, epsilon_clip * adv)), new_logprob
+
+    @tf.function
+    def approx_kl(self, obs, act, logprob):
+        dist = self.policy(obs)
+
+        new_logprob = dist.log_prob(act)
+
+        return tf.reduce_mean(logprob - new_logprob)
+
 
 def main():
     parser = Parser(description='Train or test PPO')
@@ -423,9 +452,14 @@ def main():
             keras.layers.Dense(84, activation='relu'),
             keras.layers.Dense(act_spc.shape[0] if act_spc.shape else act_spc.n)
         ])
-        if act_spc.shape:
-            model.log_std = tf.Variable(tf.fill(env.action_space.shape, -0.5))
         model.summary()
+
+        actor_model = PolicyGradientTrainer(model, env.action_space)
+        def approx_kl(logprob, new_logprob):
+            return tf.reduce_mean(logprob - new_logprob)
+        actor_model.compile(opt, metrics=[approx_kl])
+
+        #actor_model.summary()
 
       # value/critic model
         critics = list()
@@ -446,8 +480,11 @@ def main():
             test(epochs, env, model)
         else:
             #env = gym.wrappers.RecordVideo(env, save_dir)
-            train(epochs, env, batch_size, model, critics, learning_rate, γ, λ, save_dir)
+            train(epochs, env, batch_size, actor_model, critics, learning_rate, γ, λ, save_dir)
         wandb.finish()
+
+first_start_time = time.time()
 
 if __name__ == '__main__':
    main()
+
