@@ -190,7 +190,7 @@ def train_one_epoch(env, batch_size, model, critics, opt, γ, λ, save_dir):
 
     train_start_time = time.time()
 
-    model.fit([batch.obs_buf, batch.act_buf, batch.gae, batch.prob_buf], epochs=80, steps_per_epoch=1, verbose=1)
+    model.fit([batch.obs_buf, batch.act_buf, batch.gae, batch.prob_buf], epochs=80, steps_per_epoch=1, verbose=0)
 
 #todo: figure out how to do early stopping with model.fit
 
@@ -217,7 +217,7 @@ def train_one_epoch(env, batch_size, model, critics, opt, γ, λ, save_dir):
         mask = tf.random.uniform([batch.size]) < bootstrap_value
         masked_obs = tf.boolean_mask(batch.obs_buf, mask)
         masked_vhats = tf.boolean_mask(batch.V_hats, mask)
-        hist = critics[i].fit(batch.obs_buf.numpy(), batch.V_hats.numpy(), epochs=80, steps_per_epoch=1, verbose=1)
+        hist = critics[i].fit(batch.obs_buf.numpy(), batch.V_hats.numpy(), epochs=80, steps_per_epoch=1, verbose=0)
         wandb.log({f'LossV{i}': tf.reduce_mean(hist.history['loss']).numpy()}, commit=False)
 
     wandb.log({'EpRet': wandb.Histogram(batch.rets),
@@ -312,8 +312,8 @@ class PolicyGradientTrainer(keras.Model):
         for metric in self.metrics:
             if metric.name == "loss":
                 metric.update_state(loss)
-            else:
-                metric.update_state(logprob, new_logprob)
+            #else:
+            #    metric.update_state(logprob, new_logprob)
 
         return {m.name: m.result() for m in self.metrics}
 
@@ -339,15 +339,6 @@ class PolicyGradientTrainer(keras.Model):
         ratio = tf.exp(new_logprob - logprob)
 
         return -tf.reduce_mean(tf.minimum(ratio * adv, epsilon_clip * adv)), new_logprob
-
-    @tf.function
-    def approx_kl(self, obs, act, logprob):
-        dist = self.policy(obs)
-
-        new_logprob = dist.log_prob(act)
-
-        return tf.reduce_mean(logprob - new_logprob)
-
 
 def main():
     parser = Parser(description='Train or test PPO')
@@ -406,6 +397,8 @@ def main():
             wandb.config.kl_stop = True
         else:
             wandb.config.kl_stop = False	
+            
+            #callback = kl_stop or kl_rollback
 
         if args.kl_rollback:
             wandb.config.kl_rollback = True
@@ -459,7 +452,7 @@ def main():
             return tf.reduce_mean(logprob - new_logprob)
         actor_model.compile(opt, metrics=[approx_kl])
 
-        #actor_model.summary()
+        actor_model.summary()
 
       # value/critic model
         critics = list()
