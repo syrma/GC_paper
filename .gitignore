@@ -1,2 +1,7 @@
 saves/
 .ipynb_checkpoints/
+build/
+gc_paper.egg-info/
+src/gc_paper.egg-info/
+uv.lock
+wandb/
