@@ -150,7 +150,7 @@ class Buffer(object):
         obs, act, logprob = self.obs_buf, self.act_buf, self.prob_buf
 
         if self.continuous:
-            dist = tfd.MultivariateNormalDiag(model(obs), tf.exp(self.model.log_std))
+            dist = tfd.MultivariateNormalDiag(self.model(obs), tf.exp(self.model.log_std))
         else:
             dist = tfd.Categorical(logits=self.model(obs))
 
@@ -164,7 +164,7 @@ class Buffer(object):
         obs, act, adv, logprob = self.obs_buf, self.act_buf, self.gae, self.prob_buf
 
         if self.continuous:
-            dist = tfd.MultivariateNormalDiag(model(obs), tf.exp(self.model.log_std))
+            dist = tfd.MultivariateNormalDiag(self.model(obs), tf.exp(self.model.log_std))
         else:
             dist = tfd.Categorical(logits=self.model(obs))
 
@@ -221,7 +221,7 @@ def run_one_episode(env, buf):
     return time.time() - critic_start
 
 
-def train_one_epoch(env, batch_size, model, critics, opt, γ, λ, save_dir):
+def train_one_epoch(env, batch_size, model, critics, opt, γ, λ, kl_target, save_dir):
     obs_spc = env.observation_space
     act_spc = env.action_space
 
@@ -286,12 +286,12 @@ def load_model(model, load_path):
     ckpt.restore(manager.latest_checkpoint)
     print("Restoring from {}".format(manager.latest_checkpoint))
 
-def train(epochs, env, batch_size, model, critics, learning_rate, γ, λ, save_dir):
+def train(epochs, env, batch_size, model, critics, learning_rate, γ, λ, kl_target, save_dir):
     opt = keras.optimizers.Adam(learning_rate)
     for i in range(1, epochs + 1):
         start_time = time.time()
         print('Epoch: ', i)
-        batch_loss = train_one_epoch(env, batch_size, model, critics, opt, γ, λ, save_dir)
+        batch_loss = train_one_epoch(env, batch_size, model, critics, opt, γ, λ, kl_target, save_dir)
         now = time.time()
 
         wandb.log({'Epoch': i,
@@ -305,11 +305,16 @@ def test(epochs, env, model):
         obs, done = env.reset(), False
         episode_rew = 0
         while not done:
-            #env.render()
+            env.render()
             act, _ = action(model, obs, env)
             obs, rew, done, _ = env.step(act.numpy())
             episode_rew += rew
         print("Episode reward", episode_rew)
+        
+        wandb.log({'Epoch': i,
+                   'TotalEnvInteracts': i,
+                   'EpisodeReward': episode_rew})
+
 
 class Parser(argparse.ArgumentParser):
     def error(self, message):
@@ -349,7 +354,7 @@ def main():
     load_dir = args.load_dir
 
     batch_size = 10000
-    epochs = 200
+    epochs = 500
     learning_rate = 3e-4
     opt = keras.optimizers.Adam(learning_rate)
     γ = .99
@@ -359,7 +364,7 @@ def main():
 
     for seed in seeds:
         run_name = f"ensemble-{n_critics}-{seed}"
-        wandb.init(project=args.wandb_project_name, entity='rlexp', reinit=True, name=run_name, monitor_gym=True, save_code=True)
+        wandb.init(project=args.wandb_project_name, entity='gc_paper', reinit=True, name=run_name, monitor_gym=True, save_code=True)
         wandb.config.env = env_name
         wandb.config.epochs = epochs
         wandb.config.batch_size = batch_size
@@ -388,14 +393,12 @@ def main():
             save_dir = tempfile.mkdtemp(dir='saves', prefix=run_name)
         else:
             save_dir = args.save_dir
+            
+        save_dir = save_dir + '/' + env_name
 
 
-        #environment creation
-        if args.test != None:
-            env = gym.make(env_name, render_mode="human")
-        else:
-            env = gym.make(env_name)
-            #env = gym.wrappers.RecordVideo(env, save_dir)
+        #environment creation            
+        env = gym.make(env_name)
 
         obs_spc = env.observation_space
         act_spc = env.action_space
@@ -446,7 +449,7 @@ def main():
             test(epochs, env, model)
         else:
             #env = gym.wrappers.RecordVideo(env, save_dir)
-            train(epochs, env, batch_size, model, critics, learning_rate, γ, λ, save_dir)
+            train(epochs, env, batch_size, model, critics, learning_rate, γ, λ, kl_target, save_dir)
         wandb.finish()
 
 if __name__ == '__main__':
