@@ -354,7 +354,7 @@ def main():
     load_dir = args.load_dir
 
     batch_size = 10000
-    epochs = 500
+    epochs = 200
     learning_rate = 3e-4
     opt = keras.optimizers.Adam(learning_rate)
     γ = .99
@@ -445,7 +445,7 @@ def main():
             load_model(model, load_dir +'/'+ env_name)
 
         if args.test != None:
-            #env.render()
+            env.render()
             test(epochs, env, model)
         else:
             #env = gym.wrappers.RecordVideo(env, save_dir)

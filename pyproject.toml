@@ -3,8 +3,9 @@ requires = ["setuptools >= 61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
+requires-python = "<3.13, >=3.8"
 name = "gc_paper"
-dependencies = ["tensorflow","wandb", "tf_keras", "tensorflow_probability", "gym<0.25", "pybullet"]
+dependencies = ["tensorflow","wandb", "tf_keras", "tensorflow_probability", "gym<0.24", "pygame", "pybullet"]
 version = "0.1"
 
 [project.scripts]
